@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Password Vault</title>
+<style>
+:root {
+  --bg: #f4f2ee; --surface: #ffffff; --surface-2: #ebe8e2; --text: #1d1b18;
+  --muted: #6b665e; --border: #d9d4cb; --accent: #2f5d50; --accent-text: #ffffff;
+  --danger: #a3362a; --ok: #2f6b3a; --radius: 10px;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #151614; --surface: #1e201d; --surface-2: #2a2c28; --text: #ecebe6;
+    --muted: #9c9a92; --border: #363833; --accent: #7fb8a4; --accent-text: #10201a;
+    --danger: #e38274; --ok: #8cc79a;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+header.top { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
+header.top h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.on { background: var(--ok); }
+#devStatus { color: var(--muted); font-size: 13px; margin-left: auto; text-align: right; }
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 24px;
+}
+.card h2 { margin: 0 0 6px; font-size: 20px; }
+.card p { margin: 0 0 16px; color: var(--muted); }
+label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+input, textarea {
+  width: 100%; padding: 10px 12px; font: inherit; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+}
+input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+textarea { min-height: 70px; resize: vertical; }
+button {
+  font: inherit; padding: 9px 14px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+}
+button:hover { filter: brightness(0.96); }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button.danger { color: var(--danger); }
+button.small { padding: 5px 10px; font-size: 13px; }
+button:disabled { opacity: .5; cursor: default; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row.end { justify-content: flex-end; }
+.mt { margin-top: 18px; }
+.msg { min-height: 20px; margin-top: 12px; font-size: 14px; }
+.msg.err { color: var(--danger); }
+.msg.ok { color: var(--ok); }
+.hidden { display: none !important; }
+.toolbar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.toolbar input { flex: 1 1 200px; }
+#saveStatus { font-size: 13px; color: var(--muted); margin: 0 0 10px; min-height: 18px; }
+ul.entries { list-style: none; margin: 0; padding: 0; }
+ul.entries li {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  margin-bottom: 8px;
+}
+.entry-main { flex: 1; min-width: 0; }
+.entry-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entry-sub { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty { color: var(--muted); text-align: center; padding: 40px 0; }
+.pw-field { display: flex; gap: 6px; }
+.pw-field input { font-family: var(--mono); }
+dialog {
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 0;
+  background: var(--surface); color: var(--text); width: min(520px, calc(100vw - 32px));
+}
+dialog::backdrop { background: rgba(0,0,0,.45); }
+dialog form { padding: 22px; }
+dialog h3 { margin: 0 0 4px; }
+.footer-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 28px; }
+.footer-actions button { font-size: 13px; }
+.warn { font-size: 13px; color: var(--muted); border-left: 3px solid var(--accent); padding-left: 10px; margin-top: 14px; }
+@media (max-width: 520px) {
+  ul.entries li { flex-wrap: wrap; }
+  .entry-actions { width: 100%; display: flex; gap: 6px; }
+  .entry-actions button { flex: 1; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <span class="dot" id="devDot"></span>
+    <h1>Password Vault</h1>
+    <span id="devStatus">Non connesso</span>
+  </header>
+
+  <!-- 1. Connect -->
+  <section id="scrConnect" class="card">
+    <h2>Collega la chiavetta</h2>
+    <p>Collega l'ESP32 via USB e premi il pulsante. Le password vengono decifrate solo in questo browser: la chiavetta conserva soltanto dati cifrati.</p>
+    <button class="primary" id="btnConnect">Connetti dispositivo</button>
+    <div class="msg err" id="connectMsg"></div>
+  </section>
+
+  <!-- 2a. Unlock -->
+  <section id="scrUnlock" class="card hidden">
+    <h2>Sblocca il vault</h2>
+    <p>Inserisci la master password.</p>
+    <form id="formUnlock">
+      <input type="password" id="unlockPw" autocomplete="current-password" placeholder="Master password" required>
+      <div class="row mt"><button class="primary" type="submit" id="btnUnlock">Sblocca</button></div>
+      <div class="msg" id="unlockMsg"></div>
+    </form>
+  </section>
+
+  <!-- 2b. Create -->
+  <section id="scrCreate" class="card hidden">
+    <h2>Crea un nuovo vault</h2>
+    <p>La chiavetta è vuota. Scegli una master password.</p>
+    <form id="formCreate">
+      <label for="createPw">Master password (almeno 10 caratteri)</label>
+      <input type="password" id="createPw" autocomplete="new-password" minlength="10" required>
+      <label for="createPw2">Ripeti master password</label>
+      <input type="password" id="createPw2" autocomplete="new-password" minlength="10" required>
+      <div class="warn">Non esiste recupero: se dimentichi la master password i dati non sono più leggibili da nessuno, nemmeno da te.</div>
+      <div class="row mt"><button class="primary" type="submit" id="btnCreate">Crea vault</button></div>
+      <div class="msg" id="createMsg"></div>
+    </form>
+  </section>
+
+  <!-- 3. Vault -->
+  <section id="scrVault" class="hidden">
+    <div class="toolbar">
+      <input type="search" id="search" placeholder="Cerca…" autocomplete="off">
+      <button class="primary" id="btnAdd">+ Nuova</button>
+      <button id="btnLock">Blocca</button>
+    </div>
+    <div id="saveStatus"></div>
+    <ul class="entries" id="entryList"></ul>
+    <div class="footer-actions">
+      <button id="btnExport">Esporta backup cifrato</button>
+      <button id="btnImport">Importa backup</button>
+      <button id="btnChangePw">Cambia master password</button>
+      <input type="file" id="importFile" accept=".pvault,application/json" class="hidden">
+    </div>
+  </section>
+</main>
+
+<dialog id="dlgEntry">
+  <form method="dialog" id="formEntry">
+    <h3 id="dlgTitle">Nuova voce</h3>
+    <label for="fTitle">Nome</label>
+    <input id="fTitle" required placeholder="es. Gmail">
+    <label for="fUser">Utente / email</label>
+    <input id="fUser" autocomplete="off">
+    <label for="fPass">Password</label>
+    <div class="pw-field">
+      <input id="fPass" type="password" autocomplete="off">
+      <button type="button" class="small" id="btnShow">Mostra</button>
+      <button type="button" class="small" id="btnGen">Genera</button>
+    </div>
+    <label for="fUrl">Sito</label>
+    <input id="fUrl" autocomplete="off" placeholder="https://">
+    <label for="fNotes">Note</label>
+    <textarea id="fNotes"></textarea>
+    <div class="row mt">
+      <button type="button" class="danger" id="btnDelete">Elimina</button>
+      <span style="flex:1"></span>
+      <button type="button" id="btnCancel">Annulla</button>
+      <button class="primary" type="submit">Salva</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgChangePw">
+  <form method="dialog" id="formChangePw">
+    <h3>Cambia master password</h3>
+    <label for="cpOld">Master password attuale</label>
+    <input type="password" id="cpOld" required>
+    <label for="cpNew">Nuova master password (almeno 10 caratteri)</label>
+    <input type="password" id="cpNew" minlength="10" required>
+    <label for="cpNew2">Ripeti nuova master password</label>
+    <input type="password" id="cpNew2" minlength="10" required>
+    <div class="msg err" id="cpMsg"></div>
+    <div class="row mt end">
+      <button type="button" id="cpCancel">Annulla</button>
+      <button class="primary" type="submit">Cambia</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------- config
+const KDF_ITERATIONS = 600000;       // PBKDF2-SHA256 (OWASP 2023+ recommendation)
+const AUTO_LOCK_MS = 5 * 60 * 1000;
+const CLIPBOARD_CLEAR_MS = 30 * 1000;
+const CHUNK = 512;                   // firmware accepts up to 1024 chars per CHUNK
+const AAD = new TextEncoder().encode("PVAULT1");
+
+const $ = (id) => document.getElementById(id);
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+// ---------------------------------------------------------------- helpers
+function b64(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(s);
+}
+function unb64(str) {
+  const s = atob(str);
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+function randomBytes(n) { return crypto.getRandomValues(new Uint8Array(n)); }
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+function generatePassword(len = 20) {
+  const sets = ["ABCDEFGHJKLMNPQRSTUVWXYZ", "abcdefghijkmnopqrstuvwxyz", "23456789", "!@#$%^&*-_=+?"];
+  const all = sets.join("");
+  const pick = (chars) => {
+    // Rejection sampling to avoid modulo bias.
+    const limit = 256 - (256 % chars.length);
+    while (true) {
+      const b = crypto.getRandomValues(new Uint8Array(1))[0];
+      if (b < limit) return chars[b % chars.length];
+    }
+  };
+  while (true) {
+    let pw = "";
+    for (let i = 0; i < len; i++) pw += pick(all);
+    if (sets.every((set) => [...pw].some((c) => set.includes(c)))) return pw;
+  }
+}
+
+// ---------------------------------------------------------------- crypto
+async function deriveKey(password, salt, iterations) {
+  const base = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+
+// Blob stored on the device: JSON header + AES-256-GCM ciphertext.
+async function sealVault(data, key, salt, iterations) {
+  const iv = randomBytes(12);
+  const ct = new Uint8Array(await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv, additionalData: AAD }, key, enc.encode(JSON.stringify(data))));
+  return JSON.stringify({ v: 1, kdf: "PBKDF2-SHA256", iter: iterations, salt: b64(salt), iv: b64(iv), ct: b64(ct) });
+}
+
+function parseBlob(text) {
+  const h = JSON.parse(text);
+  if (h.v !== 1 || h.kdf !== "PBKDF2-SHA256" || !h.salt || !h.iv || !h.ct) throw new Error("Formato vault non riconosciuto");
+  return h;
+}
+
+async function openVault(header, password) {
+  const salt = unb64(header.salt);
+  const key = await deriveKey(password, salt, header.iter);
+  let plain;
+  try {
+    plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(header.iv), additionalData: AAD }, key, unb64(header.ct));
+  } catch {
+    throw new Error("Master password errata");
+  }
+  return { key, salt, iterations: header.iter, data: JSON.parse(dec.decode(plain)) };
+}
+
+// ---------------------------------------------------------------- device
+class Device {
+  constructor() { this.port = null; this.lines = []; this.waiter = null; this.queue = Promise.resolve(); this.onDisconnect = null; }
+
+  async connect() {
+    this.port = await navigator.serial.requestPort();
+    await this.port.open({ baudRate: 115200, bufferSize: 1 << 18 });
+    this.writer = this.port.writable.getWriter();
+    this.reader = this.port.readable.pipeThrough(new TextDecoderStream()).getReader();
+    this.readLoop();
+    // Boot messages may still be in flight: retry PING until the device answers.
+    await sleep(300);
+    for (let i = 0; i < 6; i++) {
+      this.lines = [];
+      try {
+        if ((await this.command("PING", 1000)) === "PONG") return;
+      } catch { /* retry */ }
+    }
+    throw new Error("Il dispositivo non risponde. È il firmware Password Vault?");
+  }
+
+  async readLoop() {
+    let buf = "";
+    try {
+      while (true) {
+        const { value, done } = await this.reader.read();
+        if (done) break;
+        buf += value;
+        let i;
+        while ((i = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, i).replace(/\r$/, "");
+          buf = buf.slice(i + 1);
+          if (this.waiter) { const w = this.waiter; this.waiter = null; w(line); }
+          else this.lines.push(line);
+        }
+      }
+    } catch { /* port lost */ }
+    this.port = null;
+    if (this.onDisconnect) this.onDisconnect();
+  }
+
+  nextLine(timeoutMs) {
+    if (this.lines.length) return Promise.resolve(this.lines.shift());
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => { this.waiter = null; reject(new Error("Timeout dal dispositivo")); }, timeoutMs);
+      this.waiter = (line) => { clearTimeout(t); resolve(line); };
+    });
+  }
+
+  // Commands are serialized so responses never interleave.
+  command(cmd, timeoutMs = 10000) {
+    const run = async () => {
+      if (!this.port) throw new Error("Dispositivo disconnesso");
+      await this.writer.write(enc.encode(cmd + "\n"));
+      return this.nextLine(timeoutMs);
+    };
+    const p = this.queue.then(run, run);
+    this.queue = p.catch(() => {});
+    return p;
+  }
+
+  async info() {
+    const r = await this.command("INFO");
+    const m = r.match(/^INFO (\d+) (\d+) (\d+) (\d+)$/);
+    if (!m) throw new Error("Risposta inattesa: " + r);
+    return { proto: +m[1], max: +m[2], stored: +m[3], seq: +m[4] };
+  }
+
+  async get() {
+    const r = await this.command("GET", 30000);
+    if (r === "EMPTY") return null;
+    if (!r.startsWith("DATA ")) throw new Error("Risposta inattesa: " + r);
+    return r.slice(5);
+  }
+
+  async put(blob) {
+    let r = await this.command("BEGIN " + blob.length);
+    if (r !== "READY") throw new Error(r === "ERR too_large" ? "Vault troppo grande per la chiavetta" : "Errore: " + r);
+    for (let i = 0; i < blob.length; i += CHUNK) {
+      const end = Math.min(i + CHUNK, blob.length);
+      r = await this.command("CHUNK " + blob.slice(i, end));
+      if (r !== "ACK " + end) throw new Error("Trasferimento interrotto: " + r);
+    }
+    r = await this.command("COMMIT", 30000);
+    if (!r.startsWith("OK ")) throw new Error("Scrittura fallita: " + r);
+  }
+}
+
+// ---------------------------------------------------------------- state
+const dev = new Device();
+let session = null;     // { key, salt, iterations, data: { entries: [] } }
+let editingId = null;
+let lockTimer = null;
+let saving = Promise.resolve();
+
+function show(screen) {
+  for (const id of ["scrConnect", "scrUnlock", "scrCreate", "scrVault"]) $(id).classList.toggle("hidden", id !== screen);
+}
+function setMsg(el, text, kind = "") { el.textContent = text; el.className = "msg " + kind; }
+function setDevice(connected, text) {
+  $("devDot").classList.toggle("on", connected);
+  $("devStatus").textContent = text;
+}
+
+function lock() {
+  session = null;
+  editingId = null;
+  clearTimeout(lockTimer);
+  $("entryList").replaceChildren();
+  $("search").value = "";
+  if ($("dlgEntry").open) $("dlgEntry").close();
+  if ($("dlgChangePw").open) $("dlgChangePw").close();
+  if (dev.port) enterDevice(); else show("scrConnect");
+}
+
+function bumpLockTimer() {
+  if (!session) return;
+  clearTimeout(lockTimer);
+  lockTimer = setTimeout(lock, AUTO_LOCK_MS);
+}
+["pointerdown", "keydown"].forEach((ev) => document.addEventListener(ev, bumpLockTimer, { passive: true }));
+
+dev.onDisconnect = () => {
+  setDevice(false, "Disconnesso");
+  session = null;
+  show("scrConnect");
+  setMsg($("connectMsg"), "Dispositivo scollegato. Il vault è stato bloccato.", "err");
+};
+
+// ---------------------------------------------------------------- flows
+async function enterDevice() {
+  const info = await dev.info();
+  setDevice(true, `Connesso · ${info.stored ? Math.ceil(info.stored / 1024) + " KB salvati" : "vuoto"}`);
+  if (info.stored > 0) {
+    show("scrUnlock");
+    setMsg($("unlockMsg"), "");
+    $("unlockPw").value = "";
+    $("unlockPw").focus();
+  } else {
+    show("scrCreate");
+    $("createPw").focus();
+  }
+}
+
+$("btnConnect").onclick = async () => {
+  setMsg($("connectMsg"), "");
+  if (!("serial" in navigator)) {
+    setMsg($("connectMsg"), "Questo browser non supporta Web Serial. Usa Chrome o Edge (su Android: Chrome aggiornato).", "err");
+    return;
+  }
+  try {
+    await dev.connect();
+    await enterDevice();
+  } catch (e) {
+    if (e.name !== "NotFoundError") setMsg($("connectMsg"), e.message, "err");
+  }
+};
+
+$("formUnlock").onsubmit = async (ev) => {
+  ev.preventDefault();
+  $("btnUnlock").disabled = true;
+  setMsg($("unlockMsg"), "Decifratura…");
+  try {
+    const blob = await dev.get();
+    if (!blob) return enterDevice();
+    session = await openVault(parseBlob(blob), $("unlockPw").value);
+    $("unlockPw").value = "";
+    show("scrVault");
+    render();
+    bumpLockTimer();
+    $("saveStatus").textContent = "";
+  } catch (e) {
+    setMsg($("unlockMsg"), e.message, "err");
+  } finally {
+    $("btnUnlock").disabled = false;
+  }
+};
+
+$("formCreate").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const pw = $("createPw").value;
+  if (pw !== $("createPw2").value) return setMsg($("createMsg"), "Le password non coincidono", "err");
+  $("btnCreate").disabled = true;
+  setMsg($("createMsg"), "Creazione…");
+  try {
+    const salt = randomBytes(16);
+    const key = await deriveKey(pw, salt, KDF_ITERATIONS);
+    session = { key, salt, iterations: KDF_ITERATIONS, data: { entries: [] } };
+    await dev.put(await sealVault(session.data, key, salt, KDF_ITERATIONS));
+    $("createPw").value = $("createPw2").value = "";
+    setDevice(true, "Connesso");
+    show("scrVault");
+    render();
+    bumpLockTimer();
+  } catch (e) {
+    session = null;
+    setMsg($("createMsg"), e.message, "err");
+  } finally {
+    $("btnCreate").disabled = false;
+  }
+};
+
+$("btnLock").onclick = lock;
+
+// Every change is re-encrypted and written to the device.
+function persist() {
+  const snapshot = session;
+  saving = saving.then(async () => {
+    if (!snapshot) return;
+    $("saveStatus").textContent = "Salvataggio sulla chiavetta…";
+    try {
+      await dev.put(await sealVault(snapshot.data, snapshot.key, snapshot.salt, snapshot.iterations));
+      $("saveStatus").textContent = "Salvato sulla chiavetta ✓";
+    } catch (e) {
+      $("saveStatus").textContent = "⚠ Salvataggio fallito: " + e.message;
+    }
+  });
+  return saving;
+}
+
+// ---------------------------------------------------------------- list
+function render() {
+  if (!session) return;
+  const q = $("search").value.trim().toLowerCase();
+  const list = $("entryList");
+  const entries = session.data.entries
+    .filter((e) => !q || [e.title, e.username, e.url].some((f) => (f || "").toLowerCase().includes(q)))
+    .sort((a, b) => a.title.localeCompare(b.title, "it", { sensitivity: "base" }));
+  list.replaceChildren();
+  if (!entries.length) {
+    const li = document.createElement("div");
+    li.className = "empty";
+    li.textContent = session.data.entries.length ? "Nessun risultato" : "Nessuna password salvata. Premi “+ Nuova”.";
+    list.append(li);
+    return;
+  }
+  for (const e of entries) {
+    const li = document.createElement("li");
+    const main = document.createElement("div");
+    main.className = "entry-main";
+    const t = document.createElement("div"); t.className = "entry-title"; t.textContent = e.title;
+    const s = document.createElement("div"); s.className = "entry-sub"; s.textContent = e.username || e.url || "—";
+    main.append(t, s);
+    const actions = document.createElement("div");
+    actions.className = "entry-actions row";
+    actions.append(
+      btn("Copia utente", () => copy(e.username, "Utente copiato"), !e.username),
+      btn("Copia password", () => copy(e.password, "Password copiata (verrà cancellata tra 30 s)", true), !e.password),
+      btn("Modifica", () => openEntry(e)));
+    li.append(main, actions);
+    list.append(li);
+  }
+}
+function btn(label, onclick, disabled = false) {
+  const b = document.createElement("button");
+  b.className = "small"; b.textContent = label; b.onclick = onclick; b.disabled = disabled;
+  return b;
+}
+async function copy(text, note, clearLater = false) {
+  try {
+    await navigator.clipboard.writeText(text);
+    $("saveStatus").textContent = note;
+    if (clearLater) {
+      setTimeout(async () => {
+        try { if ((await navigator.clipboard.readText()) === text) await navigator.clipboard.writeText(""); } catch { /* best effort */ }
+      }, CLIPBOARD_CLEAR_MS);
+    }
+  } catch {
+    $("saveStatus").textContent = "Impossibile copiare negli appunti";
+  }
+}
+$("search").oninput = render;
+
+// ---------------------------------------------------------------- entry dialog
+function openEntry(entry) {
+  editingId = entry ? entry.id : null;
+  $("dlgTitle").textContent = entry ? "Modifica voce" : "Nuova voce";
+  $("fTitle").value = entry?.title || "";
+  $("fUser").value = entry?.username || "";
+  $("fPass").value = entry?.password || "";
+  $("fUrl").value = entry?.url || "";
+  $("fNotes").value = entry?.notes || "";
+  $("fPass").type = "password";
+  $("btnShow").textContent = "Mostra";
+  $("btnDelete").classList.toggle("hidden", !entry);
+  $("dlgEntry").showModal();
+  $("fTitle").focus();
+}
+$("btnAdd").onclick = () => openEntry(null);
+$("btnCancel").onclick = () => $("dlgEntry").close();
+$("btnShow").onclick = () => {
+  const hidden = $("fPass").type === "password";
+  $("fPass").type = hidden ? "text" : "password";
+  $("btnShow").textContent = hidden ? "Nascondi" : "Mostra";
+};
+$("btnGen").onclick = () => {
+  $("fPass").value = generatePassword();
+  $("fPass").type = "text";
+  $("btnShow").textContent = "Nascondi";
+};
+$("formEntry").onsubmit = (ev) => {
+  ev.preventDefault();
+  if (!session) return;
+  const fields = {
+    title: $("fTitle").value.trim(), username: $("fUser").value.trim(), password: $("fPass").value,
+    url: $("fUrl").value.trim(), notes: $("fNotes").value, updated: new Date().toISOString(),
+  };
+  if (editingId) {
+    Object.assign(session.data.entries.find((e) => e.id === editingId), fields);
+  } else {
+    session.data.entries.push({ id: crypto.randomUUID(), created: fields.updated, ...fields });
+  }
+  $("dlgEntry").close();
+  render();
+  persist();
+};
+$("btnDelete").onclick = () => {
+  if (!session || !editingId) return;
+  const e = session.data.entries.find((x) => x.id === editingId);
+  if (!confirm(`Eliminare “${e.title}”?`)) return;
+  session.data.entries = session.data.entries.filter((x) => x.id !== editingId);
+  $("dlgEntry").close();
+  render();
+  persist();
+};
+
+// ---------------------------------------------------------------- backup
+$("btnExport").onclick = async () => {
+  try {
+    await saving;
+    const blob = await dev.get();
+    if (!blob) return;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([blob], { type: "application/json" }));
+    a.download = `password-vault-${new Date().toISOString().slice(0, 10)}.pvault`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    $("saveStatus").textContent = "Backup esportato (è cifrato: serve la master password per leggerlo)";
+  } catch (e) {
+    $("saveStatus").textContent = "⚠ Export fallito: " + e.message;
+  }
+};
+$("btnImport").onclick = () => $("importFile").click();
+$("importFile").onchange = async () => {
+  const file = $("importFile").files[0];
+  $("importFile").value = "";
+  if (!file) return;
+  try {
+    const text = (await file.text()).trim();
+    parseBlob(text);
+    if (!confirm("Il backup sostituirà TUTTO il contenuto della chiavetta. Continuare?")) return;
+    await saving;
+    await dev.put(text);
+    lock();
+    setMsg($("unlockMsg"), "Backup importato. Sblocca con la master password del backup.", "ok");
+  } catch (e) {
+    $("saveStatus").textContent = "⚠ Import fallito: " + e.message;
+  }
+};
+
+// ---------------------------------------------------------------- change master password
+$("btnChangePw").onclick = () => {
+  for (const id of ["cpOld", "cpNew", "cpNew2"]) $(id).value = "";
+  setMsg($("cpMsg"), "", "err");
+  $("dlgChangePw").showModal();
+};
+$("cpCancel").onclick = () => $("dlgChangePw").close();
+$("formChangePw").onsubmit = async (ev) => {
+  ev.preventDefault();
+  if (!session) return;
+  if ($("cpNew").value !== $("cpNew2").value) return setMsg($("cpMsg"), "Le nuove password non coincidono", "err");
+  try {
+    await saving;
+    // Verify the current password against what is on the device.
+    await openVault(parseBlob(await dev.get()), $("cpOld").value);
+    const salt = randomBytes(16);
+    const key = await deriveKey($("cpNew").value, salt, KDF_ITERATIONS);
+    await dev.put(await sealVault(session.data, key, salt, KDF_ITERATIONS));
+    session = { ...session, key, salt, iterations: KDF_ITERATIONS };
+    $("dlgChangePw").close();
+    $("saveStatus").textContent = "Master password cambiata ✓";
+  } catch (e) {
+    setMsg($("cpMsg"), e.message, "err");
+  }
+};
+</script>
+</body>
+</html>
