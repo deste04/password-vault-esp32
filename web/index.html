@@ -61,6 +61,7 @@ button:disabled { opacity: .5; cursor: default; }
 .toolbar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
 .toolbar input { flex: 1 1 200px; }
 #saveStatus { font-size: 13px; color: var(--muted); margin: 0 0 10px; min-height: 18px; }
+#saveStatus.err { color: var(--danger); font-size: 14px; font-weight: 600; }
 ul.entries { list-style: none; margin: 0; padding: 0; }
 ul.entries li {
   display: flex; align-items: center; gap: 12px; padding: 12px 14px;
@@ -325,16 +326,42 @@ class Device {
     });
   }
 
-  // Commands are serialized so responses never interleave.
-  command(cmd, timeoutMs = 10000) {
-    const run = async () => {
-      if (!this.port) throw new Error("Dispositivo disconnesso");
-      await this.writer.write(enc.encode(cmd + "\n"));
-      return this.nextLine(timeoutMs);
-    };
-    const p = this.queue.then(run, run);
+  // Runs fn with exclusive access to the port, so responses never interleave.
+  exclusive(fn) {
+    const p = this.queue.then(fn, fn);
     this.queue = p.catch(() => {});
     return p;
+  }
+
+  command(cmd, timeoutMs = 10000) {
+    return this.exclusive(async () => {
+      if (!this.port) throw new Error("Dispositivo disconnesso");
+      // The device only speaks when asked: anything already queued is a stale
+      // reply (late answer after a timeout, boot banner, ...). Drop it so it
+      // can't be mistaken for the answer to this command.
+      this.lines = [];
+      await this.writer.write(enc.encode(cmd + "\n"));
+      return this.nextLine(timeoutMs);
+    });
+  }
+
+  // Bring the line protocol back in step after an error: terminate any partial
+  // line the device may be holding, let late replies drain, then PING until
+  // the device answers PONG.
+  async resync() {
+    await this.exclusive(async () => {
+      if (!this.port) throw new Error("Dispositivo disconnesso");
+      await this.writer.write(enc.encode("\n"));
+      await sleep(300);
+      this.lines = [];
+    });
+    for (let i = 0; i < 5; i++) {
+      try {
+        if ((await this.command("PING", 1000)) === "PONG") return;
+      } catch { /* retry */ }
+      await sleep(200);
+    }
+    throw new Error("Il dispositivo non risponde");
   }
 
   async info() {
@@ -351,9 +378,22 @@ class Device {
     return r.slice(5);
   }
 
+  // One retry after a resync: a single dropped byte or late reply on the
+  // serial link should not lose a save.
   async put(blob) {
+    try {
+      await this.putOnce(blob);
+    } catch (e) {
+      if (!this.port || e.fatal) throw e;
+      await this.resync();
+      await this.putOnce(blob);
+    }
+  }
+
+  async putOnce(blob) {
     let r = await this.command("BEGIN " + blob.length);
-    if (r !== "READY") throw new Error(r === "ERR too_large" ? "Vault troppo grande per la chiavetta" : "Errore: " + r);
+    if (r === "ERR too_large") throw Object.assign(new Error("Vault troppo grande per la chiavetta"), { fatal: true });
+    if (r !== "READY") throw new Error("Errore: " + r);
     for (let i = 0; i < blob.length; i += CHUNK) {
       const end = Math.min(i + CHUNK, blob.length);
       r = await this.command("CHUNK " + blob.slice(i, end));
@@ -375,6 +415,10 @@ function show(screen) {
   for (const id of ["scrConnect", "scrUnlock", "scrCreate", "scrVault"]) $(id).classList.toggle("hidden", id !== screen);
 }
 function setMsg(el, text, kind = "") { el.textContent = text; el.className = "msg " + kind; }
+function setSaveStatus(text, isError = false) {
+  $("saveStatus").textContent = text;
+  $("saveStatus").classList.toggle("err", isError);
+}
 function setDevice(connected, text) {
   $("devDot").classList.toggle("on", connected);
   $("devStatus").textContent = text;
@@ -446,7 +490,7 @@ $("formUnlock").onsubmit = async (ev) => {
     show("scrVault");
     render();
     bumpLockTimer();
-    $("saveStatus").textContent = "";
+    setSaveStatus("");
   } catch (e) {
     setMsg($("unlockMsg"), e.message, "err");
   } finally {
@@ -485,12 +529,12 @@ function persist() {
   const snapshot = session;
   saving = saving.then(async () => {
     if (!snapshot) return;
-    $("saveStatus").textContent = "Salvataggio sulla chiavetta…";
+    setSaveStatus("Salvataggio sulla chiavetta…");
     try {
       await dev.put(await sealVault(snapshot.data, snapshot.key, snapshot.salt, snapshot.iterations));
-      $("saveStatus").textContent = "Salvato sulla chiavetta ✓";
+      setSaveStatus("Salvato sulla chiavetta ✓");
     } catch (e) {
-      $("saveStatus").textContent = "⚠ Salvataggio fallito: " + e.message;
+      setSaveStatus("⚠ Salvataggio fallito: " + e.message, true);
     }
   });
   return saving;
@@ -537,14 +581,14 @@ function btn(label, onclick, disabled = false) {
 async function copy(text, note, clearLater = false) {
   try {
     await navigator.clipboard.writeText(text);
-    $("saveStatus").textContent = note;
+    setSaveStatus(note);
     if (clearLater) {
       setTimeout(async () => {
         try { if ((await navigator.clipboard.readText()) === text) await navigator.clipboard.writeText(""); } catch { /* best effort */ }
       }, CLIPBOARD_CLEAR_MS);
     }
   } catch {
-    $("saveStatus").textContent = "Impossibile copiare negli appunti";
+    setSaveStatus("Impossibile copiare negli appunti", true);
   }
 }
 $("search").oninput = render;
@@ -613,9 +657,9 @@ $("btnExport").onclick = async () => {
     a.download = `password-vault-${new Date().toISOString().slice(0, 10)}.pvault`;
     a.click();
     URL.revokeObjectURL(a.href);
-    $("saveStatus").textContent = "Backup esportato (è cifrato: serve la master password per leggerlo)";
+    setSaveStatus("Backup esportato (è cifrato: serve la master password per leggerlo)");
   } catch (e) {
-    $("saveStatus").textContent = "⚠ Export fallito: " + e.message;
+    setSaveStatus("⚠ Export fallito: " + e.message, true);
   }
 };
 $("btnImport").onclick = () => $("importFile").click();
@@ -632,7 +676,7 @@ $("importFile").onchange = async () => {
     lock();
     setMsg($("unlockMsg"), "Backup importato. Sblocca con la master password del backup.", "ok");
   } catch (e) {
-    $("saveStatus").textContent = "⚠ Import fallito: " + e.message;
+    setSaveStatus("⚠ Import fallito: " + e.message, true);
   }
 };
 
@@ -656,7 +700,7 @@ $("formChangePw").onsubmit = async (ev) => {
     await dev.put(await sealVault(session.data, key, salt, KDF_ITERATIONS));
     session = { ...session, key, salt, iterations: KDF_ITERATIONS };
     $("dlgChangePw").close();
-    $("saveStatus").textContent = "Master password cambiata ✓";
+    setSaveStatus("Master password cambiata ✓");
   } catch (e) {
     setMsg($("cpMsg"), e.message, "err");
   }
